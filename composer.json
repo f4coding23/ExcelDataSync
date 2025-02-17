@@ -1,0 +1,13 @@
+{
+  "require": {
+    "phpoffice/phpspreadsheet": "^4.0"
+  },
+  "scripts": {
+    "post-install-cmd": [
+      "php generate-tech-info.php"
+    ],
+    "post-update-cmd": [
+      "php generate-tech-info.php"
+    ]
+  }
+}

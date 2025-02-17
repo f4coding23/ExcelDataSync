@@ -1,0 +1,22 @@
+{
+    "created_at": "2025-02-17 19:43:56",
+    "updated_at": "2025-02-17 19:57:35",
+    "project_name": "ExcelDataSync",
+    "git_user": "No disponible",
+    "git_email": "No disponible",
+    "git_last_commit": "No disponible",
+    "php_version": "8.1.10",
+    "composer_version": "Composer version 2.4.1 2022-08-20 11:44:50",
+    "composer_packages": {
+        "composer/pcre": "3.3.2",
+        "maennchen/zipstream-php": "3.1.1",
+        "markbaker/complex": "3.0.2",
+        "markbaker/matrix": "3.0.1",
+        "phpoffice/phpspreadsheet": "4.0.0",
+        "psr/http-client": "1.0.3",
+        "psr/http-factory": "1.1.0",
+        "psr/http-message": "2.0",
+        "psr/simple-cache": "3.0.0"
+    },
+    "os": "Windows NT DESARROLLO1 10.0 build 19045 (Windows 10) AMD64"
+}
