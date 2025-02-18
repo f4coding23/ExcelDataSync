@@ -4,7 +4,7 @@ require 'vendor/autoload.php';
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 
-// Configuración de conexión a SQL Server para DBACOSAC_TEST (Tipos, Condiciones y Estado)
+// Configuración de conexión a SQL Server
 $serverName = "10.0.3.16, 1433"; 
 $connectionOptions = [
     "Database" => "DBACOSAC_TEST",
@@ -18,7 +18,7 @@ if (!$conn) {
     die("❌ Error de conexión a SQL Server (DBACOSAC_TEST): " . print_r(sqlsrv_errors(), true));
 }
 
-// Configuración de conexión a SQL Server para DBACINHOUSE_TEST (Empresas)
+// Configuración de conexión a DBACINHOUSE_TEST
 $connectionOptionsInhouse = [
     "Database" => "DBACINHOUSE_TEST",
     "Uid" => "sa",
@@ -38,95 +38,127 @@ $hoja = $spreadsheet->getActiveSheet();
 
 // Obtener la última fila con datos
 $maxFila = $hoja->getHighestRow();
-$valoresTipos = [];
-$valoresCondicion = [];
-$valoresEmpresa = [];
-$valoresEstado = [];
+$filasErrores = [];
 $filasProcesadas = [];
 
-// Leer las columnas B, E, F y G desde la fila 2
+// **Procesar cada fila**
 for ($fila = 2; $fila <= $maxFila; $fila++) {
-    $valorB = strtolower(trim($hoja->getCell("B" . $fila)->getValue()));
-    $valorE = strtolower(trim($hoja->getCell("E" . $fila)->getValue()));
-    $valorF = strtolower(trim($hoja->getCell("F" . $fila)->getValue()));
-    $valorG = strtolower(trim($hoja->getCell("G" . $fila)->getValue()));
+    $filaDatos = $hoja->rangeToArray("A$fila:" . $hoja->getHighestColumn() . $fila)[0];
 
-    if (!empty($valorB)) $valoresTipos[$fila] = $valorB;
-    if (!empty($valorE)) $valoresCondicion[$fila] = $valorE;
-    if (!empty($valorF)) $valoresEmpresa[$fila] = $valorF;
-    if (!empty($valorG)) $valoresEstado[$fila] = $valorG;
-}
+    $valorB = trim($filaDatos[1] ?? '');
+    $valorE = trim($filaDatos[4] ?? '');
+    $valorF = trim($filaDatos[5] ?? '');
+    $valorG = strtolower(trim($filaDatos[6] ?? ''));
+    $valorL = trim($filaDatos[11] ?? '');
+    $valorM = trim($filaDatos[12] ?? '');
+    $valorO = trim($filaDatos[14] ?? ''); // Columna O (Nombre Usuario)
 
-// **Consulta SQL para validar la columna B (Tipos de equipo)**
-$sqlB = "SELECT LOWER(descripcion) AS descripcion_normalizada, idtipo FROM [dbo].[TBOSA_TIPOS] WHERE LOWER(descripcion) IN (" . implode(",", array_fill(0, count($valoresTipos), "?")) . ")";
-$stmtB = sqlsrv_query($conn, $sqlB, array_values($valoresTipos));
+    // **Convertir Estado en columna G**
+    $filaDatos[6] = ($valorG === "activo") ? 1 : 2;
 
-$valoresBDTipos = [];
-while ($row = sqlsrv_fetch_array($stmtB, SQLSRV_FETCH_ASSOC)) {
-    $valoresBDTipos[$row['descripcion_normalizada']] = $row['idtipo'];
-}
-
-// **Consulta SQL para validar la columna E (Condiciones)**
-$sqlE = "SELECT LOWER(condicion) AS condicion_normalizada, idCondicion FROM [dbo].[TBOSA_CONDICION] WHERE LOWER(condicion) IN (" . implode(",", array_fill(0, count($valoresCondicion), "?")) . ")";
-$stmtE = sqlsrv_query($conn, $sqlE, array_values($valoresCondicion));
-
-$valoresBDCondicion = [];
-while ($row = sqlsrv_fetch_array($stmtE, SQLSRV_FETCH_ASSOC)) {
-    $valoresBDCondicion[$row['condicion_normalizada']] = $row['idCondicion'];
-}
-
-// **Consulta SQL para validar la columna F (Empresa) en DBACINHOUSE_TEST**
-$sqlF = "SELECT E.EMPINIDEMPRESA, LOWER(E.EMPVCNOEMPRESA) AS empresa_normalizada, LOWER(E.EMPVCNOCORTO) AS empresa_corto 
-         FROM [DBACINHOUSE_TEST].[dbo].[TBSEGMAESISTEMA] SIS
-         INNER JOIN [DBACINHOUSE_TEST].[dbo].[TBLSEGTBLSISSUC] SS ON SIS.SISINIDSISTEMA = SS.SISINIDSISTEMA
-         INNER JOIN [DBACINHOUSE_TEST].[dbo].[TBSEGMAESUCURSAL] SUC ON SS.SUCINIDSUCURSAL = SUC.SUCINIDSUCURSAL
-         INNER JOIN [DBACINHOUSE_TEST].[dbo].[TBSEGMAEEMPRESA] E ON SUC.EMPINIDEMPRESA = E.EMPINIDEMPRESA
-         WHERE SIS.SISCHCDSISTEMA = 'OSA'
-         AND (LOWER(E.EMPVCNOEMPRESA) IN (" . implode(",", array_fill(0, count($valoresEmpresa), "?")) . ")
-         OR LOWER(E.EMPVCNOCORTO) IN (" . implode(",", array_fill(0, count($valoresEmpresa), "?")) . "))";
-$stmtF = sqlsrv_query($connInhouse, $sqlF, array_merge(array_values($valoresEmpresa), array_values($valoresEmpresa)));
-
-$valoresBDEmpresa = [];
-while ($row = sqlsrv_fetch_array($stmtF, SQLSRV_FETCH_ASSOC)) {
-    $valoresBDEmpresa[$row['empresa_normalizada']] = $row['EMPINIDEMPRESA'];
-    $valoresBDEmpresa[$row['empresa_corto']] = $row['EMPINIDEMPRESA'];
-}
-
-// **Procesar y modificar EXCELDATASYNC con las correcciones**
-foreach ($valoresTipos as $filaOriginal => $valorB) {
-    $filaProcesada = $hoja->rangeToArray("A$filaOriginal:" . $hoja->getHighestColumn() . $filaOriginal)[0];
-
-    // Reemplazar columna B con idtipo
-    if (isset($valoresBDTipos[$valorB])) {
-        $filaProcesada[1] = $valoresBDTipos[$valorB];
+    // **Validar y reemplazar la columna B**
+    $stmtB = sqlsrv_query($conn, "SELECT idtipo FROM TBOSA_TIPOS WHERE descripcion = ?", [$valorB]);
+    if ($stmtB && $row = sqlsrv_fetch_array($stmtB, SQLSRV_FETCH_ASSOC)) {
+        $filaDatos[1] = $row['idtipo'];
+    } else {
+        $filasErrores[] = array_merge(["B$fila"], $filaDatos);
     }
 
-    // Reemplazar columna E con idCondicion
-    if (isset($valoresBDCondicion[$valoresCondicion[$filaOriginal]])) {
-        $filaProcesada[4] = $valoresBDCondicion[$valoresCondicion[$filaOriginal]];
+    // **Validar y reemplazar la columna E**
+    $stmtE = sqlsrv_query($conn, "SELECT idCondicion FROM TBOSA_CONDICION WHERE condicion = ?", [$valorE]);
+    if ($stmtE && $row = sqlsrv_fetch_array($stmtE, SQLSRV_FETCH_ASSOC)) {
+        $filaDatos[4] = $row['idCondicion'];
+    } else {
+        $filasErrores[] = array_merge(["E$fila"], $filaDatos);
     }
 
-    // Reemplazar columna F con EMPINIDEMPRESA
-    if (isset($valoresBDEmpresa[$valoresEmpresa[$filaOriginal]])) {
-        $filaProcesada[5] = $valoresBDEmpresa[$valoresEmpresa[$filaOriginal]];
+    // **Validar y reemplazar la columna F**
+    $stmtF = sqlsrv_query($connInhouse, "SELECT EMPINIDEMPRESA FROM TBSEGMAEEMPRESA WHERE EMPVCNOEMPRESA = ? OR EMPVCNOCORTO = ?", [$valorF, $valorF]);
+    if ($stmtF && $row = sqlsrv_fetch_array($stmtF, SQLSRV_FETCH_ASSOC)) {
+        $filaDatos[5] = $row['EMPINIDEMPRESA'];
+    } else {
+        $filasErrores[] = array_merge(["F$fila"], $filaDatos);
     }
 
-    // Reemplazar columna G con estado convertido (1 o 2)
-    $estadoConvertido = ($valoresEstado[$filaOriginal] === "activo") ? 1 : 2;
-    $filaProcesada[6] = $estadoConvertido;
+    // **Validar y reemplazar la columna L**
+    $stmtL = sqlsrv_query($connInhouse, "SELECT EMPINIDEMPRESA FROM TBSEGMAEEMPRESA WHERE EMPVCNOEMPRESA = ? OR EMPVCNOCORTO = ?", [$valorL, $valorL]);
+    if ($stmtL && $row = sqlsrv_fetch_array($stmtL, SQLSRV_FETCH_ASSOC)) {
+        $filaDatos[11] = $row['EMPINIDEMPRESA'];
+    } else {
+        $filasErrores[] = array_merge(["L$fila"], $filaDatos);
+    }
 
-    $filasProcesadas[] = $filaProcesada;
+    // **Validar y reemplazar la columna M**
+    $stmtM = sqlsrv_query($connInhouse, "SELECT SUCINIDSUCURSAL FROM TBSEGMAESUCURSAL WHERE EMPINIDEMPRESA = ? AND SUCINIDSUCURSAL != 23", [$filaDatos[11]]);
+    if ($stmtM && $row = sqlsrv_fetch_array($stmtM, SQLSRV_FETCH_ASSOC)) {
+        $filaDatos[12] = $row['SUCINIDSUCURSAL'];
+    } else {
+        $filasErrores[] = array_merge(["M$fila"], $filaDatos);
+    }
+
+    // **Obtener USUINIDUSUARIO en nueva columna P (ya implementado en código base)**
+    $nuevoValorP = "";
+    if ($valorO !== "SIN USUARIO") {
+        $consultaSQL = "
+            DECLARE @NombreCompleto NVARCHAR(255) = ?;
+            DECLARE @SQLQuery NVARCHAR(MAX) = N'';
+
+            SET @SQLQuery = N'SELECT USUINIDUSUARIO FROM TBSEGMAEUSUARIO WHERE ';
+
+            DECLARE @Index INT = 1;
+            DECLARE @Word NVARCHAR(50);
+            DECLARE @TempNombre NVARCHAR(255) = @NombreCompleto + ' ';
+
+            WHILE CHARINDEX(' ', @TempNombre, @Index) > 0
+            BEGIN
+                SET @Word = SUBSTRING(@TempNombre, @Index, CHARINDEX(' ', @TempNombre, @Index) - @Index);
+                SET @Index = CHARINDEX(' ', @TempNombre, @Index) + 1;
+
+                IF LEN(@Word) > 0
+                    SET @SQLQuery = @SQLQuery + N'CHARINDEX(''' + @Word + ''', USUVCNOUSUARIO) > 0 AND ';
+            END
+
+            SET @SQLQuery = LEFT(@SQLQuery, LEN(@SQLQuery) - 4);
+
+            EXEC sp_executesql @SQLQuery;
+        ";
+
+        $stmtP = sqlsrv_query($connInhouse, $consultaSQL, [$valorO]);
+        if ($stmtP && $row = sqlsrv_fetch_array($stmtP, SQLSRV_FETCH_ASSOC)) {
+            $nuevoValorP = $row['USUINIDUSUARIO'];
+        } else {
+            $filasErrores[] = array_merge(["P$fila"], $filaDatos);
+        }
+    }
+    array_splice($filaDatos, 16, 0, $nuevoValorP);
+
+    // Guardar la fila procesada
+    $filasProcesadas[] = $filaDatos;
 }
 
-// **Guardar archivo EXCELDATASYNC**
+// **Guardar archivos**
 $fechaActual = date("Y-m-d");
-$excelProcesado = new Spreadsheet();
-$hojaProcesado = $excelProcesado->getActiveSheet();
-$hojaProcesado->fromArray([$hoja->rangeToArray("A1:" . $hoja->getHighestColumn() . "1")[0]], null, 'A1');
-$hojaProcesado->fromArray($filasProcesadas, null, 'A2');
-$writerProcesado = IOFactory::createWriter($excelProcesado, 'Xlsx');
-$archivoProcesado = "document/EXCELDATASYNC-$fechaActual.xlsx";
-$writerProcesado->save($archivoProcesado);
+
+function guardarExcel($nombre, $encabezado, $data) {
+    global $fechaActual;
+    if (!empty($data)) {
+        $excel = new Spreadsheet();
+        $hoja = $excel->getActiveSheet();
+        $hoja->fromArray([$encabezado], null, 'A1');
+        $hoja->fromArray($data, null, 'A2');
+        $writer = IOFactory::createWriter($excel, 'Xlsx');
+        $writer->save("document/$nombre-$fechaActual.xlsx");
+    }
+}
+
+// Modificar encabezados para incluir nueva columna P sin sobrescribir
+$encabezados = $hoja->rangeToArray("A1:" . $hoja->getHighestColumn() . "1")[0];
+array_splice($encabezados, 16, 0, "USUINIDUSUARIO");
+
+// **Guardar archivos corregidos**
+guardarExcel("EXCELDATASYNC", $encabezados, $filasProcesadas);
+guardarExcel("DATA-FINAL", $encabezados, $filasProcesadas);
+guardarExcel("DATA-FINAL-ERRORES", array_merge(["Celda"], $encabezados), $filasErrores);
 
 echo "✅ Proceso completado. Archivos generados en 'document/'";
 ?>
