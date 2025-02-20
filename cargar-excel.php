@@ -3,15 +3,21 @@
 require 'vendor/autoload.php'; // Asegúrate de instalar phpspreadsheet
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Shared\Date;
 
-$servername = "10.0.3.16, 1433"; 
-$username = "sa";
-$password = "4cf4rm4";
-$dbname = "DBACOSAC_TEST";
 
-$conn = new mysqli($servername, $username, $password, $dbname);
-if ($conn->connect_error) {
-    die("Conexión fallida: " . $conn->connect_error);
+$serverName = "10.0.3.16, 1433";
+$connectionOptions = [
+    "Database" => "DBACOSAC_TEST",
+    "Uid" => "sa",
+    "PWD" => "4cf4rm4",
+    "CharacterSet" => "UTF-8"
+];
+
+
+$conn = sqlsrv_connect($serverName, $connectionOptions);
+if ($conn === false) {
+    die(print_r(sqlsrv_errors(), true));
 }
 
 $file = 'document\data-osac-final.xlsx';
@@ -19,9 +25,14 @@ $spreadsheet = IOFactory::load($file);
 $sheet = $spreadsheet->getActiveSheet();
 $data = $sheet->toArray(null, true, true, true);
 
+function safe_strlen($value)
+{
+    return !is_null($value) ? strlen($value) : 0;
+}
+
 foreach ($data as $key => $row) {
     if ($key == 1) continue; // Omitir encabezados
-    
+
     $codigo = $row['A'];
     $nombre = $row['B'];
     $idCondicion = $row['C'];
@@ -41,25 +52,30 @@ foreach ($data as $key => $row) {
     $estado = $row['Q'];
     $password = $row['R'];
     $mac = $row['S'];
-    $garantiaInicio = !empty($row['T']) ? DateTime::createFromFormat('d/m/Y', $row['T'])->format('Y-m-d') : null;
-    $garantiaFin = !empty($row['U']) ? DateTime::createFromFormat('d/m/Y', $row['U'])->format('Y-m-d') : null;
+
+    $convertirFecha = fn($valor, $esFechaExcel) =>
+    empty($valor) ? null : (is_numeric($valor) && $esFechaExcel ? Date::excelToDateTimeObject((float)$valor)->format('Y-m-d') : (preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : (DateTime::createFromFormat('d/m/Y', trim($valor))?->format('Y-m-d') ?? null)));
+
+    $garantiaInicio = $convertirFecha($row['T'], Date::isDateTime($sheet->getCell('T' . $key)));
+    $garantiaFin = $convertirFecha($row['U'], Date::isDateTime($sheet->getCell('U' . $key)));
+
     $propiedad = $row['V'];
     $numero = $row['W'];
     $duracion = $row['X'];
 
+
     $sql = "INSERT INTO TBOSA_EQUIPOS (codigo, nombre, idCondicion, idUsuario, idArea, idLocal, piso, proveedor, marca, modelo, serie, ip, session, codigoInventario, otros, idTipo, estado, password, mac, garantiaInicio, garantiaFin, propiedad, numero, duracion) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ssiiiiissssssssiiisssssssi", $codigo, $nombre, $idCondicion, $idUsuario, $idArea, $idLocal, $piso, $proveedor, $marca, $modelo, $serie, $ip, $session, $codigoInventario, $otros, $idTipo, $estado, $password, $mac, $garantiaInicio, $garantiaFin, $propiedad, $numero, $duracion);
-    
-    if (!$stmt->execute()) {
-        echo "Error en la fila $key: " . $stmt->error . "\n";
+    $params = [$codigo, $nombre, $idCondicion, $idUsuario, $idArea, $idLocal, $piso, $proveedor, $marca, $modelo, $serie, $ip, $session, $codigoInventario, $otros, $idTipo, $estado, $password, $mac, $garantiaInicio, $garantiaFin, $propiedad, $numero, $duracion];
+
+    $stmt = sqlsrv_query($conn, $sql, $params);
+    if ($stmt === false) {
+        echo "Fila $key -> Código: " . safe_strlen($row['A']) . ", Nombre: " . safe_strlen($row['B']) . ", Proveedor: " . safe_strlen($proveedor) . ", Marca: " . safe_strlen($marca) . ", Modelo: " . safe_strlen($modelo) . ", IP: " . safe_strlen($ip) . ", Código Inventario: " . safe_strlen($codigoInventario) . ", Password: " . safe_strlen($password) . ", MAC: " . safe_strlen($mac) . "\n";
+        echo "Error en la fila $key: " . print_r(sqlsrv_errors(), true) . "\n";
     }
 }
 
-$stmt->close();
-$conn->close();
+sqlsrv_close($conn);
 
 echo "Carga completada.";
-?>

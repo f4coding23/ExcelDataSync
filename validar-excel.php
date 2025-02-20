@@ -38,7 +38,13 @@ $hoja = $spreadsheet->getActiveSheet();
 
 // Obtener la última fila con datos
 $maxFila = $hoja->getHighestRow();
+$encabezados = $hoja->rangeToArray("A1:" . $hoja->getHighestColumn() . "1")[0];
+
+// Insertar la cabecera "USUINIDUSUARIO" en la columna Q
+array_splice($encabezados, 16, 0, "USUINIDUSUARIO");  // Coloca "USUINIDUSUARIO" en la columna Q
+
 $filasErrores = [];
+$filasErroresB = [];
 $filasProcesadas = [];
 
 // **Procesar cada fila**
@@ -51,17 +57,25 @@ for ($fila = 2; $fila <= $maxFila; $fila++) {
     $valorG = strtolower(trim($filaDatos[6] ?? ''));
     $valorL = trim($filaDatos[11] ?? '');
     $valorM = trim($filaDatos[12] ?? '');
-    $valorO = trim($filaDatos[14] ?? ''); // Columna O (Nombre Usuario)
+    $valorO = trim($filaDatos[14] ?? '');
 
     // **Convertir Estado en columna G**
-    $filaDatos[6] = ($valorG === "activo") ? 1 : 2;
+    if ($valorG === "activo") {
+        $filaDatos[6] = 1;
+    } elseif ($valorG === "inactivo") {
+        $filaDatos[6] = 2;
+    } elseif ($valorG === "baja contable") {
+        $filaDatos[6] = 3;
+    }
 
     // **Validar y reemplazar la columna B**
     $stmtB = sqlsrv_query($conn, "SELECT idtipo FROM TBOSA_TIPOS WHERE descripcion = ?", [$valorB]);
     if ($stmtB && $row = sqlsrv_fetch_array($stmtB, SQLSRV_FETCH_ASSOC)) {
         $filaDatos[1] = $row['idtipo'];
     } else {
-        $filasErrores[] = array_merge(["B$fila"], $filaDatos);
+        $filaConErrorB = $filaDatos;
+        $filaConErrorB[] = "Fila $fila";
+        $filasErroresB[] = $filaConErrorB;
     }
 
     // **Validar y reemplazar la columna E**
@@ -89,14 +103,14 @@ for ($fila = 2; $fila <= $maxFila; $fila++) {
     }
 
     // **Validar y reemplazar la columna M**
-    $stmtM = sqlsrv_query($connInhouse, "SELECT SUCINIDSUCURSAL FROM TBSEGMAESUCURSAL WHERE EMPINIDEMPRESA = ? AND SUCINIDSUCURSAL != 23", [$filaDatos[11]]);
+    $stmtM = sqlsrv_query($connInhouse, "SELECT SUCINIDSUCURSAL FROM TBSEGMAESUCURSAL WHERE SUCINIDSUCURSAL != 23 AND EMPINIDEMPRESA = ?", [$filaDatos[11]]);
     if ($stmtM && $row = sqlsrv_fetch_array($stmtM, SQLSRV_FETCH_ASSOC)) {
         $filaDatos[12] = $row['SUCINIDSUCURSAL'];
     } else {
         $filasErrores[] = array_merge(["M$fila"], $filaDatos);
     }
 
-    // **Obtener USUINIDUSUARIO en nueva columna P (ya implementado en código base)**
+    // **Obtener USUINIDUSUARIO en nueva columna P**
     $nuevoValorP = "";
     if ($valorO !== "SIN USUARIO") {
         $consultaSQL = "
@@ -132,32 +146,24 @@ for ($fila = 2; $fila <= $maxFila; $fila++) {
     }
     array_splice($filaDatos, 16, 0, $nuevoValorP);
 
-    // Guardar la fila procesada
     $filasProcesadas[] = $filaDatos;
 }
 
-// **Guardar archivos**
-$fechaActual = date("Y-m-d");
-
+// **Función para guardar archivos Excel**
 function guardarExcel($nombre, $encabezado, $data) {
-    global $fechaActual;
     if (!empty($data)) {
-        $excel = new Spreadsheet();
-        $hoja = $excel->getActiveSheet();
+        $spreadsheet = new Spreadsheet();
+        $hoja = $spreadsheet->getActiveSheet();
         $hoja->fromArray([$encabezado], null, 'A1');
         $hoja->fromArray($data, null, 'A2');
-        $writer = IOFactory::createWriter($excel, 'Xlsx');
-        $writer->save("document/$nombre-$fechaActual.xlsx");
+        $writer = IOFactory::createWriter($spreadsheet, 'Xlsx');
+        $writer->save("document/$nombre-" . date("Y-m-d") . ".xlsx");
     }
 }
 
-// Modificar encabezados para incluir nueva columna P sin sobrescribir
-$encabezados = $hoja->rangeToArray("A1:" . $hoja->getHighestColumn() . "1")[0];
-array_splice($encabezados, 16, 0, "USUINIDUSUARIO");
-
 // **Guardar archivos corregidos**
 guardarExcel("EXCELDATASYNC", $encabezados, $filasProcesadas);
-guardarExcel("DATA-FINAL", $encabezados, $filasProcesadas);
+guardarExcel("TIPOS-ERRORES", array_merge($encabezados, ["Posición en EXCELDATASYNC"]), $filasErroresB);
 guardarExcel("DATA-FINAL-ERRORES", array_merge(["Celda"], $encabezados), $filasErrores);
 
 echo "✅ Proceso completado. Archivos generados en 'document/'";
